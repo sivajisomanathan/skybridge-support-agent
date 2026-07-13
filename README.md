@@ -76,14 +76,19 @@ see the test suite) and the agent behaves identically, just without traces.
    app code — it's a fictional public-facing policy document, not a secret, so no special
    handling is needed for it.
 
-**Note on `runtime.txt`:** this pins Render to Python 3.11.9. Without it, Render may
-default to a much newer Python version that doesn't yet have pre-built wheels for
-`pydantic-core` (a `fastapi`/`pydantic` dependency), causing pip to try compiling it from
-source via Rust/maturin — which fails on Render's build environment (read-only
-filesystem where the Rust cargo cache tries to write). If you see a build error
-mentioning `maturin`, `cargo`, or `pydantic-core`, confirm `runtime.txt` is present at the
-repo root and that Render picked it up (check the build log for the Python version it
-reports using).
+**Note on Python version:** this repo includes a `.python-version` file pinning Render to
+Python 3.11.9. Without it, Render may default to a much newer Python version that
+doesn't yet have pre-built wheels for `pydantic-core` (a `fastapi`/`pydantic`
+dependency), causing pip to try compiling it from source via Rust/maturin — which fails
+on Render's build environment (read-only filesystem where the Rust cargo cache tries to
+write). If you see a build error mentioning `maturin`, `cargo`, or `pydantic-core`:
+1. Confirm `.python-version` is present at the repo root and was actually committed/pushed.
+2. As a second, independent safeguard, also set the `PYTHON_VERSION` environment variable
+   to `3.11.9` in the Render dashboard (Environment tab) — Render supports both
+   mechanisms, and setting both removes any ambiguity about which one Render is reading.
+3. After changing either, trigger a fresh deploy (not just a restart) and check the top of
+   the build log for the Python version Render reports using, to confirm the pin took
+   effect before debugging further.
 
 ## Logging, latency, and error handling
 
