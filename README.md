@@ -76,6 +76,15 @@ see the test suite) and the agent behaves identically, just without traces.
    app code — it's a fictional public-facing policy document, not a secret, so no special
    handling is needed for it.
 
+**Note on `runtime.txt`:** this pins Render to Python 3.11.9. Without it, Render may
+default to a much newer Python version that doesn't yet have pre-built wheels for
+`pydantic-core` (a `fastapi`/`pydantic` dependency), causing pip to try compiling it from
+source via Rust/maturin — which fails on Render's build environment (read-only
+filesystem where the Rust cargo cache tries to write). If you see a build error
+mentioning `maturin`, `cargo`, or `pydantic-core`, confirm `runtime.txt` is present at the
+repo root and that Render picked it up (check the build log for the Python version it
+reports using).
+
 ## Logging, latency, and error handling
 
 - Every `/chat` call is timed; latency in milliseconds is logged and also returned in
