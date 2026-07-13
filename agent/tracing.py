@@ -1,30 +1,18 @@
 """
-LangSmith tracing for each graph node, with PII redaction applied BEFORE
-anything is sent to LangSmith -- per the Problem Framing Document's explicit
-requirement ("Observability: LangSmith (with PII redaction applied before
-tracing)").
+Per-function LangSmith tracing for individually-decorated node functions, with
+recursive redaction applied to their own inputs/outputs.
 
-Design note: this project's LLM calls use the raw OpenAI SDK directly
-(client.chat.completions.create), not langchain_openai's ChatOpenAI wrapper,
-so automatic LangSmith auto-instrumentation (which hooks LangChain's chat
-model classes) does not apply here. Instead, each graph node function is
-wrapped with LangSmith's `traceable` decorator, which works with any Python
-function regardless of what it calls internally.
-
-Redaction strategy: the same regex-based redaction used in every prior
-phase's JSONL logging (PNR-like tokens, email addresses) is applied to
-free-text fields in both the traced inputs and outputs, via `traceable`'s
-process_inputs/process_outputs hooks. If tracing is disabled (no
-LANGSMITH_API_KEY set), @traced_node becomes a plain no-op passthrough --
-the agent works identically either way, just without traces.
-
-CAVEAT: `process_inputs`/`process_outputs` are LangSmith SDK features that
-could not be verified against a live installation in this environment (no
-PyPI access in the build sandbox). Confirm on first real run that traces
-appear correctly in your LangSmith project; if process_inputs/process_outputs
-aren't supported in your installed langsmith version, `pip install -U
-langsmith` and retry, or fall back to manually redacting fields inside each
-node function before returning them.
+IMPORTANT: this is defense-in-depth, not the primary redaction mechanism. The
+primary, guaranteed mechanism is LANGSMITH_HIDE_INPUTS/LANGSMITH_HIDE_OUTPUTS,
+set globally in agent/config.py -- required because LangGraph has its own
+built-in, automatic LangSmith tracing (separate from this module's @traceable
+wrapper) that traces the full graph invocation and every routing function on
+its own, bypassing whatever redaction is applied only to individually-
+decorated functions here. This was discovered via real traces in a live
+LangSmith project showing unredacted PNRs in the top-level "LangGraph" run
+and routing-function runs (route_after_classify, etc.), even though functions
+wrapped with @traced_node redacted correctly for their own specific
+input/output. See agent/config.py for the full explanation of the fix.
 """
 import re
 from agent.config import TRACING_ENABLED

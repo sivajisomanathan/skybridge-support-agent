@@ -43,21 +43,38 @@ tools` to run the exact same logic that's deployed here.
 
 ## LangSmith tracing (optional but recommended)
 
-Set `LANGSMITH_API_KEY` in `.env` to enable tracing. Every graph node
-(`resolve_reference`, `classify`, `retrieve`, `booking_lookup`, `policy_calculator`,
-`adaptive_escalate`, `compose`) is wrapped with `@traceable`, so each one appears as a
-separate step in your LangSmith project, with PII redacted (PNR-like tokens, email
-addresses) from the traced inputs/outputs before they're sent — see `agent/tracing.py`
-for the exact redaction logic.
+Set `LANGSMITH_API_KEY` in `.env` to enable tracing.
 
-**Not independently verified end-to-end**: this project's sandbox has no PyPI/network
-access, so the `langsmith` package itself (and its `process_inputs`/`process_outputs`
-hooks specifically) could not be installed and tested against a live LangSmith account
-here. Confirm on your first real run that traces actually appear in your LangSmith
-project and that redaction is applied as expected; if `process_inputs`/`process_outputs`
-aren't supported in your installed version, run `pip install -U langsmith`.
+**PII redaction: what actually works, found via real testing.** An earlier version of
+this app redacted PII only inside `agent/tracing.py`'s `@traced_node` wrapper, applied to
+individually-decorated node functions. Live testing against a real LangSmith project
+showed this was **incomplete**: LangGraph has its own built-in, automatic LangSmith
+tracing, entirely separate from that wrapper. Once `LANGCHAIN_TRACING_V2` is enabled,
+LangGraph automatically traces the full graph invocation and every routing function
+(`route_after_classify`, `route_after_retrieve`, `route_after_booking`) on its own,
+capturing the complete raw state — including PNRs — and this bypasses per-function
+redaction entirely. Real traces confirmed the top-level "LangGraph" run and routing-
+function runs showed unredacted PNRs, even though individually-decorated functions like
+`resolve_reference` redacted correctly for their own specific input/output.
 
-If `LANGSMITH_API_KEY` is not set, `@traceable` becomes a transparent no-op (verified —
+**The actual fix**, per LangSmith's own documentation: `agent/config.py` now sets
+`LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true` globally whenever tracing
+is enabled. This hides input/output content at the transport level for every trace
+regardless of what generated it — the only approach that's reliably guaranteed to work
+across LangGraph's native auto-tracing, routing functions, and manually-decorated
+functions alike, rather than depending on redacting every possible code path individually
+(which, as this discovery shows, is easy to miss).
+
+**Trade-off, stated plainly**: this hides *all* input/output content in LangSmith, not
+selectively just PII — you lose visibility into `intent_category`, `tools_used`,
+`retrieved_sections`, etc. directly in the LangSmith UI. What remains visible: run names,
+the node execution order/hierarchy, per-node latency, and error status. Full
+content-level detail (including the same fields) is still available in this app's own
+structured stdout logs (see `api/main.py`'s `_log` calls and the Logging section above) --
+LangSmith becomes purely a timing/structure/error view, and the stdout logs remain the
+source of truth for content-level debugging.
+
+If `LANGSMITH_API_KEY` is not set, `@traced_node` becomes a transparent no-op (verified —
 see the test suite) and the agent behaves identically, just without traces.
 
 ## Deploying to Render
@@ -117,14 +134,20 @@ has been updated to work with newer `httpx` releases.
 
 ## Known limitations and deployment assumptions
 
-- **SQLite persistence is single-instance, not shared.** `agent/memory.py` replaced
-  Phase 6/7's in-memory Python dicts with a SQLite file, so session/feedback state now
-  survives a process restart within the same running instance — a real improvement, and
-  directly tested (see test suite: state survives a simulated restart). However, it is
-  **not** a shared/multi-instance store: if this service is ever scaled to more than one
-  Render instance, each instance would have its own separate SQLite file and its own view
-  of sessions and feedback. Fixing that would require a real shared database (Postgres,
-  etc.), which is out of scope here.
+- **SQLite persistence only survives within a single running container — and on Render's
+  free tier, that's a much shorter window than "until you redeploy."** Per Render's own
+  documentation, a free web service's filesystem is wiped not only on redeploys but on
+  every **restart and every idle spin-down** — and free services spin down automatically
+  after just 15 minutes with no incoming traffic. In practice this means: leave the app
+  idle for 15+ minutes, and the next request gets a fresh container with an empty
+  `agent_state.db` — all conversations and feedback history are gone, not just the
+  browser's active thread pointer. This is a materially bigger limitation than "state
+  resets across intentional redeploys" (which is what an earlier version of this note
+  said) — on the free tier, it effectively resets on any normal gap in usage. A paid
+  Render instance type with an attached persistent disk (or a managed database like
+  Render Postgres) would be needed to actually fix this; SQLite-on-local-disk was chosen
+  here as a deliberate, documented "better than Phase 6/7's in-memory dicts, but still not
+  production-durable" middle ground, not a claim of true persistence.
 - **Render free-tier cold starts.** Per the Problem Framing Document's known limitation:
   Render's free tier spins down on inactivity, introducing a cold-start delay of up to
   ~60 seconds on the first request after an idle period. The `/health` endpoint and the
