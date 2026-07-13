@@ -29,9 +29,6 @@ node function before returning them.
 import re
 from agent.config import TRACING_ENABLED
 
-PII_TEXT_FIELDS = {"user_input", "resolved_input"}
-PII_HISTORY_FIELDS = {"conversation_history"}
-
 
 def redact_text(text) -> str:
     if not isinstance(text, str):
@@ -41,21 +38,32 @@ def redact_text(text) -> str:
     return redacted
 
 
+def _redact_recursive(obj):
+    """Walks any nested dict/list structure and applies redact_text() to every
+    string value found, regardless of key name or nesting depth.
+
+    This replaces an earlier, narrower version that only redacted a fixed
+    allowlist of top-level keys (user_input, resolved_input,
+    conversation_history). That approach missed PII appearing under other
+    keys -- e.g. the `pnr` field, or a PNR nested inside `booking_record`
+    -- which real testing against a live LangSmith project surfaced (see
+    README). Blanket recursive string redaction is more robust: it doesn't
+    depend on correctly guessing every key a PNR might end up under, current
+    or future, including whatever nesting shape LangSmith's process_inputs/
+    process_outputs hooks actually pass (which could not be verified before
+    a live LangSmith account was available to test against).
+    """
+    if isinstance(obj, dict):
+        return {k: _redact_recursive(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_recursive(v) for v in obj]
+    if isinstance(obj, str):
+        return redact_text(obj)
+    return obj
+
+
 def _redact_dict(data: dict) -> dict:
-    if not isinstance(data, dict):
-        return data
-    safe = dict(data)
-    for key in PII_TEXT_FIELDS:
-        if key in safe:
-            safe[key] = redact_text(safe[key])
-    for key in PII_HISTORY_FIELDS:
-        if key in safe and isinstance(safe[key], list):
-            safe[key] = [
-                {**turn, "content": redact_text(turn.get("content", ""))}
-                if isinstance(turn, dict) else turn
-                for turn in safe[key]
-            ]
-    return safe
+    return _redact_recursive(data)
 
 
 if TRACING_ENABLED:
