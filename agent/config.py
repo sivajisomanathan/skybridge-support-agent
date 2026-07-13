@@ -26,28 +26,49 @@ if os.getenv("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_PROJECT", os.getenv("LANGSMITH_PROJECT", "skybridge-support-agent"))
     os.environ.setdefault("LANGCHAIN_API_KEY", os.getenv("LANGSMITH_API_KEY", ""))
-    # CRITICAL: LangGraph has its own built-in, automatic LangSmith tracing --
-    # completely separate from agent/tracing.py's @traceable wrapper. Once
-    # LANGCHAIN_TRACING_V2 is on, LangGraph traces the entire graph invocation
-    # and every routing function on its own, capturing the full raw state
-    # (including PNRs) -- this bypasses per-function redaction entirely,
-    # confirmed by inspecting real traces in a live LangSmith project (the
-    # top-level "LangGraph" run and routing-function runs showed unredacted
-    # PNRs even though individually-decorated node functions redacted
-    # correctly). Per LangSmith's own documentation, the only mechanism that
-    # reliably applies regardless of which code path generates a trace is
-    # hiding inputs/outputs globally at the client/transport level:
-    os.environ.setdefault("LANGSMITH_HIDE_INPUTS", "true")
-    os.environ.setdefault("LANGSMITH_HIDE_OUTPUTS", "true")
-    # Trade-off, stated plainly: this hides ALL input/output content in
-    # LangSmith (not just PII) -- run names, node execution order/hierarchy,
-    # per-node latency, and error status remain visible, but you lose
-    # content-level inspection (intent_category, tools_used, etc.) directly
-    # in the LangSmith UI. Full content-level detail is still available in
-    # this app's own structured stdout logs (see api/main.py's _log calls).
     TRACING_ENABLED = True
 else:
     TRACING_ENABLED = False
+
+# --- PII-aware LangSmith client (see agent/tracing.py) ---
+# LangGraph has its own built-in, automatic LangSmith tracing, separate from
+# any @traceable-decorated function -- confirmed via real traces in a live
+# LangSmith project showing unredacted PNRs in the top-level "LangGraph" run
+# and routing-function runs, even though individually-decorated node
+# functions redacted correctly for their own specific input/output.
+#
+# The correct fix, per LangSmith's own documentation and a dedicated example
+# in their PII-removal reference repo for this exact scenario
+# (langchain-ai/langsmith-pii-removal, langgraph-example/agent.py): build a
+# Client with a recursive `anonymizer` function, and make LangGraph's
+# automatic tracing route through THAT client for the duration of each graph
+# invocation via `tracing_context`. This masks PII specifically (any string
+# matching the PNR/email patterns) while preserving all other field-level
+# visibility (intent_category, tools_used, etc.) in the LangSmith UI --
+# unlike blanket LANGSMITH_HIDE_INPUTS/OUTPUTS, which hides everything.
+#
+# CAVEAT: this specific mechanism (a custom anonymizer client covering
+# LangGraph's automatic traces via tracing_context, not just explicitly
+# decorated functions) could not be verified against a live installation in
+# this build environment (no PyPI access). This replaces an earlier attempt
+# (per-function process_inputs/process_outputs) that real testing showed was
+# incomplete. Confirm on your next real run that PII is masked at ALL trace
+# levels (the top-level "LangGraph" run, routing-function runs, and
+# individual node runs) -- not just the innermost ones. If PII still leaks
+# through the top-level/routing-function runs specifically, the guaranteed
+# (but blunt) fallback is setting LANGSMITH_HIDE_INPUTS=true and
+# LANGSMITH_HIDE_OUTPUTS=true, which trades away all field-level visibility
+# in LangSmith but is documented to work regardless of trace source.
+TRACED_CLIENT = None
+if TRACING_ENABLED:
+    from langsmith import Client
+    from langsmith.anonymizer import create_anonymizer
+
+    _ANONYMIZER_RULES = [
+        {"pattern": r"\b[A-Z0-9]{5,8}\b", "replace": "[REDACTED]"},
+        {"pattern": r"\S+@\S+", "replace": "[REDACTED_EMAIL]"},
+    ]
+    TRACED_CLIENT = Client(anonymizer=create_anonymizer(_ANONYMIZER_RULES))
 
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec

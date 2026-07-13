@@ -45,34 +45,44 @@ tools` to run the exact same logic that's deployed here.
 
 Set `LANGSMITH_API_KEY` in `.env` to enable tracing.
 
-**PII redaction: what actually works, found via real testing.** An earlier version of
-this app redacted PII only inside `agent/tracing.py`'s `@traced_node` wrapper, applied to
-individually-decorated node functions. Live testing against a real LangSmith project
-showed this was **incomplete**: LangGraph has its own built-in, automatic LangSmith
-tracing, entirely separate from that wrapper. Once `LANGCHAIN_TRACING_V2` is enabled,
-LangGraph automatically traces the full graph invocation and every routing function
-(`route_after_classify`, `route_after_retrieve`, `route_after_booking`) on its own,
-capturing the complete raw state — including PNRs — and this bypasses per-function
-redaction entirely. Real traces confirmed the top-level "LangGraph" run and routing-
-function runs showed unredacted PNRs, even though individually-decorated functions like
-`resolve_reference` redacted correctly for their own specific input/output.
+**PII redaction — two attempts, here's where it actually landed.**
 
-**The actual fix**, per LangSmith's own documentation: `agent/config.py` now sets
-`LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true` globally whenever tracing
-is enabled. This hides input/output content at the transport level for every trace
-regardless of what generated it — the only approach that's reliably guaranteed to work
-across LangGraph's native auto-tracing, routing functions, and manually-decorated
-functions alike, rather than depending on redacting every possible code path individually
-(which, as this discovery shows, is easy to miss).
+*Attempt 1:* redact PII inside `agent/tracing.py`'s `@traceable` wrapper (`process_inputs`/
+`process_outputs`), applied per node function. Live testing against a real LangSmith
+project showed this was incomplete: LangGraph has its own built-in, automatic LangSmith
+tracing, separate from that wrapper. Once `LANGCHAIN_TRACING_V2` is enabled, LangGraph
+traces the entire graph invocation and every routing function
+(`route_after_classify`, etc.) on its own, capturing the full raw state — real traces
+confirmed the top-level "LangGraph" run and routing-function runs showed unredacted
+PNRs, even though individually-decorated functions redacted correctly for their own
+input/output.
 
-**Trade-off, stated plainly**: this hides *all* input/output content in LangSmith, not
-selectively just PII — you lose visibility into `intent_category`, `tools_used`,
-`retrieved_sections`, etc. directly in the LangSmith UI. What remains visible: run names,
-the node execution order/hierarchy, per-node latency, and error status. Full
-content-level detail (including the same fields) is still available in this app's own
-structured stdout logs (see `api/main.py`'s `_log` calls and the Logging section above) --
-LangSmith becomes purely a timing/structure/error view, and the stdout logs remain the
-source of truth for content-level debugging.
+*Attempt 2 (a deliberate overcorrection, flagged as such at the time):* set
+`LANGSMITH_HIDE_INPUTS`/`LANGSMITH_HIDE_OUTPUTS` globally, which guarantees no PII leaks
+anywhere — but hides *all* content, not just PII, making LangSmith traces show only
+names/timing/hierarchy with zero field-level visibility. This closed the leak but lost
+too much debugging value to be the right long-term answer.
+
+**Current approach:** a `Client` configured with a recursive `anonymizer`
+(`agent/config.py`'s `TRACED_CLIENT`, built with LangSmith's `create_anonymizer` against
+the same PNR/email regex patterns used elsewhere in this project), applied to LangGraph's
+automatic tracing via a `tracing_context(client=TRACED_CLIENT)` wrapper around the actual
+`graph.invoke()` call (see `agent/tracing.py`'s `graph_tracing_context()`, used in
+`api/main.py`'s `/chat` handler). This is LangSmith's own documented pattern for this
+exact scenario — their PII-removal reference repo has a dedicated LangGraph example for
+it — and should mask only PII-matching strings while preserving all other field-level
+visibility (`intent_category`, `tools_used`, etc.) in the LangSmith UI.
+
+**Still not independently verified end-to-end**: this is the second attempt at this
+specific problem, and like the first, could not be tested against a live LangSmith
+account in this build environment (no PyPI/network access in the sandbox). On your next
+real run, check traces at **all three levels** — the top-level "LangGraph" run, a
+routing-function run (e.g. `route_after_classify`), and an individual node run — and
+confirm PII is masked at each, not just the innermost one (that's precisely the gap the
+first attempt had). If PII still leaks through the top-level/routing-function runs
+specifically, the guaranteed fallback is the blunt `LANGSMITH_HIDE_INPUTS`/
+`LANGSMITH_HIDE_OUTPUTS` approach from Attempt 2 above — it trades away field-level
+visibility but is documented to work regardless of trace source.
 
 If `LANGSMITH_API_KEY` is not set, `@traced_node` becomes a transparent no-op (verified —
 see the test suite) and the agent behaves identically, just without traces.

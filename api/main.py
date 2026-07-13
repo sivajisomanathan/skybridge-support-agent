@@ -33,6 +33,7 @@ from pydantic import BaseModel
 
 from agent import kb, memory
 from agent.graph import build_graph, AgentState
+from agent.tracing import graph_tracing_context
 
 app = FastAPI(title="SkyBridge Support Agent API")
 
@@ -130,7 +131,9 @@ def chat(req: ChatRequest):
             "booking_record": None, "calc_result": None, "tools_used": [],
             "feedback_adapted": False, "final_response": None,
         }
-        final_state = _graph.invoke(initial_state, config={"recursion_limit": 10})
+        final_state = None
+        with graph_tracing_context():
+            final_state = _graph.invoke(initial_state, config={"recursion_limit": 10})
 
         memory.touch_conversation(thread_id, title_hint=req.message)
         memory.append_turn(thread_id, req.message, final_state["final_response"])
