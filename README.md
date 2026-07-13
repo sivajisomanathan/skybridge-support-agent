@@ -90,6 +90,14 @@ write). If you see a build error mentioning `maturin`, `cargo`, or `pydantic-cor
    the build log for the Python version Render reports using, to confirm the pin took
    effect before debugging further.
 
+**Note on `openai`/`httpx` version compatibility:** `requirements.txt` pins
+`httpx==0.27.2` alongside `openai==1.51.0`. This is required, not optional — newer
+`httpx` versions removed a `proxies` parameter that this version of the `openai` SDK's
+internal HTTP client still passes, causing a `TypeError: Client.__init__() got an
+unexpected keyword argument 'proxies'` at import time (the app fails to even start). If
+you ever upgrade `openai` in the future, check whether it still needs this `httpx` pin or
+has been updated to work with newer `httpx` releases.
+
 ## Logging, latency, and error handling
 
 - Every `/chat` call is timed; latency in milliseconds is logged and also returned in
