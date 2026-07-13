@@ -99,6 +99,17 @@ def conversations():
     return memory.list_conversations()
 
 
+@app.get("/history/{thread_id}")
+def history(thread_id: str):
+    """Returns this thread's stored turns, for the UI to replay into the chat
+    window on load/switch. Only role+content are stored per turn (not the
+    full per-turn metadata like intent/tools/trace) -- replayed messages
+    render as plain bubbles without a Trace panel, which is a display
+    limitation, not a data one: the full context is still used server-side
+    for classification/retrieval on the NEXT turn regardless."""
+    return memory.get_history(thread_id)
+
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     thread_id = req.thread_id or str(uuid.uuid4())

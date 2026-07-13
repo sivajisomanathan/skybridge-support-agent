@@ -221,15 +221,38 @@ async function loadConversations() {
   } catch (e) { /* sidebar just stays empty if this fails -- not fatal */ }
 }
 
+async function replayHistory(threadId) {
+  document.getElementById("messages").innerHTML = "";
+  if (!threadId) return;
+  try {
+    const res = await fetch(`${API_BASE}/history/${threadId}`);
+    if (!res.ok) return;
+    const turns = await res.json();
+    turns.forEach(turn => {
+      if (turn.role === "user") {
+        addUserMessage(turn.content);
+      } else {
+        // Replayed assistant turns render as plain bubbles -- per-turn trace
+        // metadata (intent/tools/retrieval) isn't stored historically, only
+        // the response text, so there's no Trace panel or feedback controls
+        // on these. Full context is still used server-side for the next
+        // turn's classification/retrieval regardless of this display gap.
+        const row = document.createElement("div");
+        row.className = "msg-row assistant";
+        row.innerHTML = `<div class="msg-bubble">${renderMarkdown(turn.content)}</div>`;
+        document.getElementById("messages").appendChild(row);
+      }
+    });
+    scrollToBottom();
+  } catch (e) { /* if history can't be fetched, just start with an empty window */ }
+}
+
 function switchConversation(threadId, title) {
   currentThreadId = threadId;
   localStorage.setItem("skybridge_current_thread", threadId);
   document.getElementById("chat-title").textContent = title || "Conversation";
-  document.getElementById("messages").innerHTML = "";
   loadConversations();
-  // Note: this demo UI doesn't replay full history into the chat window on
-  // switch (the backend/memory layer still uses full history for context --
-  // this is a display-only simplification, not a memory limitation).
+  replayHistory(threadId);
 }
 
 document.getElementById("new-chat-btn").onclick = () => {
@@ -401,6 +424,9 @@ document.getElementById("message-input").addEventListener("keydown", (e) => {
 
 checkHealth();
 loadConversations();
+if (currentThreadId) {
+  replayHistory(currentThreadId);
+}
 setInterval(checkHealth, 30000);
 </script>
 </body>

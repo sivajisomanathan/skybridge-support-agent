@@ -136,7 +136,12 @@ has been updated to work with newer `httpx` releases.
   real customers.
 - **LangSmith integration is unverified end-to-end** (see above) due to no PyPI access
   in the build environment — confirm traces appear correctly on first real deployment.
-- **The UI's conversation switcher does not replay full history into the chat window.**
-  Clicking a past conversation in the sidebar clears the visible chat and lets you
-  continue it (the backend still has full context via `agent/memory.py`), but doesn't
-  re-render every prior message. This is a display simplification, not a memory gap.
+- **The UI's conversation switcher replays past messages as plain bubbles, without full
+  trace metadata.** A `GET /history/{thread_id}` endpoint returns the stored
+  role/content turns for a thread, and the UI calls it both when switching conversations
+  in the sidebar and on page load (so a browser refresh doesn't blank the current
+  conversation). Replayed messages don't have a Trace panel or feedback buttons, because
+  only the response text is stored historically, not per-turn intent/tools/retrieval
+  metadata — that's a display limitation, not a memory gap: the full conversation
+  context is still used server-side for classification and retrieval on the next turn
+  regardless of what's visually replayed.
