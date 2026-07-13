@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SkyBridge Support</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f7; --surface: #ffffff; --surface-2: #f0f1f3;
+    --border: #e2e4e8; --text: #1a1d21; --text-muted: #6b7280;
+    --accent: #1f4e5c; --accent-bg: #e6eef0; --accent-text: #0c2a33;
+    --warn-bg: #fdf3e0; --warn-border: #eecb8a; --warn-text: #7a5714;
+    --success: #2e7d4f;
+    --radius: 10px;
+  }
+  [data-theme="dark"] {
+    --bg: #16181b; --surface: #1f2226; --surface-2: #262a2f;
+    --border: #33383e; --text: #e8e9eb; --text-muted: #9aa0a8;
+    --accent: #4a90a4; --accent-bg: #1e333a; --accent-text: #bcdbe4;
+    --warn-bg: #3a2f18; --warn-border: #6b5324; --warn-text: #e8c77e;
+    --success: #5fbf85;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+  }
+  #app { display: flex; height: 100vh; }
+
+  /* Sidebar */
+  #sidebar {
+    width: 220px; flex-shrink: 0; background: var(--surface); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  #new-chat-btn {
+    margin: 12px; padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 13px; cursor: pointer; text-align: left;
+  }
+  #new-chat-btn:hover { background: var(--surface-2); }
+  #conversation-list { flex: 1; overflow-y: auto; padding: 0 8px; }
+  .conv-item {
+    padding: 9px 10px; border-radius: 8px; margin-bottom: 3px; cursor: pointer; font-size: 13px;
+  }
+  .conv-item:hover { background: var(--surface-2); }
+  .conv-item.active { background: var(--accent-bg); color: var(--accent-text); }
+  .conv-item .conv-time { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  #sidebar-footer {
+    padding: 10px 12px; border-top: 1px solid var(--border); display: flex;
+    align-items: center; justify-content: space-between; font-size: 12px; color: var(--text-muted);
+  }
+  #theme-toggle { border: 1px solid var(--border); background: var(--surface); border-radius: 6px;
+    width: 28px; height: 28px; cursor: pointer; color: var(--text); }
+
+  /* Main chat area */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #chat-header {
+    padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex;
+    align-items: center; justify-content: space-between; background: var(--surface);
+  }
+  #chat-title { font-weight: 600; font-size: 14px; }
+  #status-indicator { font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  #status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); display: inline-block; }
+
+  #messages { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .msg-row { display: flex; }
+  .msg-row.user { justify-content: flex-end; }
+  .msg-bubble {
+    max-width: 70%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.6;
+  }
+  .msg-row.user .msg-bubble { background: var(--accent); color: white; }
+  .msg-row.assistant .msg-bubble { background: var(--surface); border: 1px solid var(--border); }
+  .msg-bubble p { margin: 0 0 8px; }
+  .msg-bubble p:last-child { margin-bottom: 0; }
+  .msg-bubble ul { margin: 4px 0; padding-left: 20px; }
+
+  .msg-col { display: flex; flex-direction: column; max-width: 78%; }
+  .msg-meta { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding-left: 2px; flex-wrap: wrap; }
+  .msg-meta .latency { font-size: 11px; color: var(--text-muted); }
+  .icon-btn {
+    border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+    border-radius: 6px; width: 24px; height: 24px; cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  .icon-btn.active { color: var(--accent); border-color: var(--accent); }
+  .trace-toggle-btn {
+    font-size: 11px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text-muted); cursor: pointer;
+  }
+  .trace-toggle-btn:hover { background: var(--surface-2); }
+
+  .trace-panel {
+    margin-top: 6px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 11px; display: none;
+  }
+  .trace-panel.open { display: block; }
+  .trace-row { display: grid; grid-template-columns: 80px 1fr; gap: 2px 8px; margin-bottom: 2px; }
+  .trace-row span:first-child { color: var(--text-muted); }
+
+  .escalation-card {
+    background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 10px;
+    padding: 10px 14px; font-size: 13px;
+  }
+  .escalation-card .esc-head { display: flex; align-items: center; gap: 6px; font-weight: 600;
+    color: var(--warn-text); margin-bottom: 6px; }
+  .escalation-card .esc-row { display: grid; grid-template-columns: 60px 1fr; gap: 2px 8px; color: var(--text); }
+  .escalation-card .esc-row span:first-child { color: var(--text-muted); }
+
+  .feedback-reason-box { display: none; margin-top: 6px; gap: 6px; }
+  .feedback-reason-box.open { display: flex; }
+  .feedback-reason-box input {
+    flex: 1; font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text);
+  }
+  .feedback-reason-box button {
+    font-size: 12px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--accent); color: white; cursor: pointer;
+  }
+
+  .typing-dots { display: flex; gap: 4px; padding: 10px 14px; }
+  .typing-dots span {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted);
+    animation: blink 1.2s infinite ease-in-out;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
+
+  #quick-actions { display: flex; gap: 8px; padding: 8px 20px; flex-wrap: wrap; }
+  .chip {
+    font-size: 12px; padding: 6px 12px; border-radius: 16px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); cursor: pointer;
+  }
+  .chip:hover { background: var(--surface-2); }
+
+  #input-bar { display: flex; gap: 8px; padding: 12px 20px 18px; }
+  #message-input {
+    flex: 1; padding: 10px 14px; border-radius: 20px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 14px; outline: none;
+  }
+  #message-input:focus { border-color: var(--accent); }
+  #send-btn {
+    width: 40px; height: 40px; border-radius: 50%; border: none; background: var(--accent);
+    color: white; cursor: pointer; font-size: 16px;
+  }
+  #send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <button id="new-chat-btn">+ New conversation</button>
+    <div id="conversation-list"></div>
+    <div id="sidebar-footer">
+      <span>Theme</span>
+      <button id="theme-toggle">&#9789;</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="chat-header">
+      <span id="chat-title">New conversation</span>
+      <span id="status-indicator"><span id="status-dot"></span><span id="status-text">Checking...</span></span>
+    </div>
+    <div id="messages"></div>
+    <div id="quick-actions">
+      <button class="chip" data-msg="My flight was delayed 6 hours, am I entitled to compensation?">Check delay compensation</button>
+      <button class="chip" data-msg="Can I change my seat to an exit row?">Change my seat</button>
+      <button class="chip" data-msg="I need to cancel my booking, will I get a refund?">Cancel booking</button>
+    </div>
+    <div id="input-bar">
+      <input type="text" id="message-input" placeholder="Message SkyBridge support..." />
+      <button id="send-btn" aria-label="Send">&#10148;</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = ""; // same-origin: FastAPI serves this file, so relative paths work as-is
+
+let currentThreadId = localStorage.getItem("skybridge_current_thread") || null;
+let currentTheme = localStorage.getItem("skybridge_theme") || "light";
+document.documentElement.setAttribute("data-theme", currentTheme);
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function renderMarkdown(text) {
+  try { return marked.parse(text); } catch (e) { return escapeHtml(text); }
+}
+
+async function checkHealth() {
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    const data = await res.json();
+    document.getElementById("status-text").textContent = data.kb_ready ? "Agent online" : "Starting up...";
+    document.getElementById("status-dot").style.background = data.kb_ready ? "var(--success)" : "#c99a2e";
+  } catch (e) {
+    document.getElementById("status-text").textContent = "Offline";
+    document.getElementById("status-dot").style.background = "#c0392b";
+  }
+}
+
+async function loadConversations() {
+  try {
+    const res = await fetch(`${API_BASE}/conversations`);
+    const convs = await res.json();
+    const list = document.getElementById("conversation-list");
+    list.innerHTML = "";
+    convs.forEach(c => {
+      const item = document.createElement("div");
+      item.className = "conv-item" + (c.thread_id === currentThreadId ? " active" : "");
+      item.innerHTML = `<div>${escapeHtml(c.title)}</div><div class="conv-time">${new Date(c.updated_at).toLocaleString()}</div>`;
+      item.onclick = () => switchConversation(c.thread_id, c.title);
+      list.appendChild(item);
+    });
+  } catch (e) { /* sidebar just stays empty if this fails -- not fatal */ }
+}
+
+function switchConversation(threadId, title) {
+  currentThreadId = threadId;
+  localStorage.setItem("skybridge_current_thread", threadId);
+  document.getElementById("chat-title").textContent = title || "Conversation";
+  document.getElementById("messages").innerHTML = "";
+  loadConversations();
+  // Note: this demo UI doesn't replay full history into the chat window on
+  // switch (the backend/memory layer still uses full history for context --
+  // this is a display-only simplification, not a memory limitation).
+}
+
+document.getElementById("new-chat-btn").onclick = () => {
+  currentThreadId = null;
+  localStorage.removeItem("skybridge_current_thread");
+  document.getElementById("chat-title").textContent = "New conversation";
+  document.getElementById("messages").innerHTML = "";
+  loadConversations();
+};
+
+document.getElementById("theme-toggle").onclick = () => {
+  currentTheme = currentTheme === "light" ? "dark" : "light";
+  document.documentElement.setAttribute("data-theme", currentTheme);
+  localStorage.setItem("skybridge_theme", currentTheme);
+};
+
+document.querySelectorAll(".chip").forEach(chip => {
+  chip.onclick = () => {
+    document.getElementById("message-input").value = chip.dataset.msg;
+    sendMessage();
+  };
+});
+
+function addUserMessage(text) {
+  const row = document.createElement("div");
+  row.className = "msg-row user";
+  row.innerHTML = `<div class="msg-bubble">${escapeHtml(text)}</div>`;
+  document.getElementById("messages").appendChild(row);
+  scrollToBottom();
+}
+
+function addTypingIndicator() {
+  const row = document.createElement("div");
+  row.className = "msg-row assistant";
+  row.id = "typing-indicator";
+  row.innerHTML = `<div class="msg-bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>`;
+  document.getElementById("messages").appendChild(row);
+  scrollToBottom();
+}
+
+function removeTypingIndicator() {
+  const el = document.getElementById("typing-indicator");
+  if (el) el.remove();
+}
+
+function addAssistantMessage(data) {
+  const row = document.createElement("div");
+  row.className = "msg-row assistant";
+  const msgId = "msg-" + Math.random().toString(36).slice(2, 9);
+
+  const isEscalation = data.outcome_type === "escalation";
+  const bubbleContent = isEscalation
+    ? `<div class="escalation-card">
+        <div class="esc-head"><span>&#9742;</span> Escalated to a human agent</div>
+        <div class="esc-row"><span>Ticket</span><span>#SB-${Math.floor(10000 + Math.random() * 89999)}</span></div>
+        <div class="esc-row"><span>Team</span><span>${escapeHtml(data.intent_category === "billing" ? "Billing Resolutions" : "Support Escalations")}</span></div>
+        <div class="esc-row"><span>SLA</span><span>Response within 2 business days</span></div>
+        <div style="margin-top:6px; color:var(--text-secondary);">${renderMarkdown(data.response)}</div>
+       </div>`
+    : `<div class="msg-bubble">${renderMarkdown(data.response)}</div>`;
+
+  row.innerHTML = `
+    <div class="msg-col">
+      ${bubbleContent}
+      <div class="msg-meta">
+        <span class="latency">${data.latency_ms ?? "?"}ms</span>
+        <button class="trace-toggle-btn" onclick="toggleTrace('${msgId}')">Trace</button>
+        <button class="icon-btn" id="${msgId}-up" onclick="rateFeedback('${msgId}', 'up', '${data.intent_category}')" aria-label="Good response">&#128077;</button>
+        <button class="icon-btn" id="${msgId}-down" onclick="showReasonBox('${msgId}')" aria-label="Bad response">&#128078;</button>
+      </div>
+      <div class="feedback-reason-box" id="${msgId}-reason-box">
+        <input type="text" id="${msgId}-reason-input" placeholder="What went wrong? (optional)" />
+        <button onclick="rateFeedback('${msgId}', 'down', '${data.intent_category}')">Submit</button>
+      </div>
+      <div class="trace-panel" id="${msgId}-trace">
+        <div class="trace-row"><span>intent</span><span>${escapeHtml(data.intent_category || "-")}</span></div>
+        <div class="trace-row"><span>tools</span><span>${(data.tools_used || []).join(", ") || "none"}</span></div>
+        <div class="trace-row"><span>retrieved</span><span>${(data.retrieved_sections || []).join(", ") || "none"}</span></div>
+        <div class="trace-row"><span>resolved</span><span>${escapeHtml(data.resolved_input || "-")}</span></div>
+        <div class="trace-row"><span>adapted</span><span>${data.feedback_adapted ? "yes (feedback-driven escalation)" : "no"}</span></div>
+      </div>
+    </div>`;
+  document.getElementById("messages").appendChild(row);
+  scrollToBottom();
+}
+
+function toggleTrace(msgId) {
+  document.getElementById(`${msgId}-trace`).classList.toggle("open");
+}
+
+function showReasonBox(msgId) {
+  document.getElementById(`${msgId}-reason-box`).classList.add("open");
+}
+
+async function rateFeedback(msgId, rating, intentCategory) {
+  const reasonInput = document.getElementById(`${msgId}-reason-input`);
+  const reason = reasonInput ? reasonInput.value : null;
+  document.getElementById(`${msgId}-up`).classList.toggle("active", rating === "up");
+  document.getElementById(`${msgId}-down`).classList.toggle("active", rating === "down");
+  const box = document.getElementById(`${msgId}-reason-box`);
+  if (box) box.classList.remove("open");
+
+  try {
+    await fetch(`${API_BASE}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        thread_id: currentThreadId, intent_category: intentCategory, rating, reason: reason || null,
+      }),
+    });
+  } catch (e) { /* feedback is best-effort from the UI's perspective */ }
+}
+
+function addErrorMessage(text) {
+  const row = document.createElement("div");
+  row.className = "msg-row assistant";
+  row.innerHTML = `<div class="msg-bubble" style="border-color: var(--warn-border); color: var(--warn-text);">${escapeHtml(text)}</div>`;
+  document.getElementById("messages").appendChild(row);
+  scrollToBottom();
+}
+
+function scrollToBottom() {
+  const messages = document.getElementById("messages");
+  messages.scrollTop = messages.scrollHeight;
+}
+
+async function sendMessage() {
+  const input = document.getElementById("message-input");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  document.getElementById("send-btn").disabled = true;
+
+  addUserMessage(text);
+  addTypingIndicator();
+
+  try {
+    const res = await fetch(`${API_BASE}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thread_id: currentThreadId, message: text }),
+    });
+    removeTypingIndicator();
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      addErrorMessage(errData.detail || "Something went wrong. Please try again.");
+      return;
+    }
+
+    const data = await res.json();
+    currentThreadId = data.thread_id;
+    localStorage.setItem("skybridge_current_thread", currentThreadId);
+    document.getElementById("chat-title").textContent = text.slice(0, 40);
+    addAssistantMessage(data);
+    loadConversations();
+  } catch (e) {
+    removeTypingIndicator();
+    addErrorMessage("Couldn't reach the support agent. Check your connection and try again.");
+  } finally {
+    document.getElementById("send-btn").disabled = false;
+  }
+}
+
+document.getElementById("send-btn").onclick = sendMessage;
+document.getElementById("message-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendMessage();
+});
+
+checkHealth();
+loadConversations();
+setInterval(checkHealth, 30000);
+</script>
+</body>
+</html>
