@@ -45,8 +45,8 @@ tools` to run the exact same logic that's deployed here.
 
 Set `LANGSMITH_API_KEY` in `.env` to enable tracing.
 
-**PII redaction — the full history, kept here rather than cleaned up, because it's a
-useful record of what was actually tried and why.**
+**PII redaction — the full history, kept here because it's a useful record of what was
+actually tried, what broke, and why.**
 
 *Attempt 1:* redact PII inside `agent/tracing.py`'s `@traceable` wrapper (`process_inputs`/
 `process_outputs`), applied per node function. Live testing against a real LangSmith
@@ -57,35 +57,40 @@ top-level "LangGraph" run and routing-function runs showed unredacted PNRs, even
 individually-decorated functions redacted correctly for their own input/output.
 
 *Attempt 2:* a `Client` with a recursive `anonymizer`, applied to LangGraph's automatic
-tracing via `tracing_context(client=...)` wrapped around `graph.invoke()`. This is
-LangSmith's own documented pattern for this exact scenario (their PII-removal reference
-repo has a dedicated LangGraph example for it) and should have preserved field-level
-visibility while masking only PII. Live testing showed a worse regression: **no traces
-appeared in LangSmith at all.** The most likely explanation is that LangGraph's automatic
-tracing uses a callback-handler code path that doesn't consult `tracing_context()`'s
-context-local overrides the way `@traceable`-decorated functions do — but this couldn't
-be confirmed without a live install to debug against, and two consecutive live-only
-failures on the fine-grained approach was enough to stop iterating on it blind.
+tracing via `tracing_context(client=...)` wrapped around `graph.invoke()` — LangSmith's
+own documented pattern for this exact scenario. Live testing showed a worse regression:
+**no traces appeared in LangSmith at all**, with Render logs showing repeated
+`Error in LangChainTracer.on_chain_start callback: AttributeError("'str' object has no
+attribute 'sub'")`.
 
-**Current approach (reverted to the simple, documented-safe mechanism):**
-`agent/config.py` sets `LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true`
-globally. This doesn't touch run creation, naming, hierarchy, or timing — only the
-input/output content payload — so it shouldn't share Attempt 2's failure mode of breaking
-tracing entirely. The trade-off, stated plainly: this hides *all* input/output content in
-LangSmith, not selectively just PII — you lose visibility into `intent_category`,
-`tools_used`, `retrieved_sections`, etc. directly in the LangSmith UI. What remains
-visible: run names, node execution order/hierarchy, per-node latency, and error status.
-Full content-level detail is still available in this app's own structured stdout logs
-(see `api/main.py`'s `_log` calls) — LangSmith becomes purely a timing/structure/error
-view, and the stdout logs remain the source of truth for content-level debugging.
+**Root cause, found from that error, not guessed:** `create_anonymizer`'s rules require
+each `"pattern"` value to be a **compiled** regex object (`re.compile(...)`), not a raw
+string. Attempt 2 passed raw strings, so every trace-post attempt called `.sub()` (a
+compiled-pattern-only method) on a plain `str`, threw this exact `AttributeError`
+internally, and silently failed in a background thread — explaining why the app kept
+working normally for users while zero traces reached LangSmith.
 
-**If you want to revisit fine-grained redaction later:** the `_redact_recursive`/
-`_redact_dict` functions in `agent/tracing.py` are still there and still correct for what
-they cover (individually-decorated functions) — they're just not sufficient on their own,
-per Attempt 1's finding. Getting LangGraph's automatic tracing to route through a custom
-anonymizer without breaking tracing entirely (Attempt 2's failure) would need actual
-debugging against a live LangSmith account, which wasn't available in this build
-environment at any point in this process.
+**Current approach: Attempt 2's design, with that one bug fixed.** `agent/config.py`'s
+`TRACED_CLIENT` now builds its anonymizer rules with `re.compile(...)` patterns. The
+overall mechanism is unchanged: `graph_tracing_context()` (in `agent/tracing.py`) wraps
+`graph.invoke()` in `tracing_context(client=TRACED_CLIENT)` so LangGraph's automatic
+tracing routes through the anonymizing client, masking PII while preserving field-level
+visibility (`intent_category`, `tools_used`, etc.) in the LangSmith UI.
+
+**Still not independently verified end-to-end** — this fixes a concrete, diagnosed bug
+(confirmed locally: a compiled pattern's `.sub()` method works correctly, while a plain
+string's does not), but the overall `tracing_context` + custom-client approach has not
+been re-tested against a live LangSmith account after this fix. On your next real run,
+first confirm traces reappear at all (that's what broke last time), then check that PII
+is masked at all three levels — the top-level "LangGraph" run, a routing-function run
+(e.g. `route_after_classify`), and an individual node run — not just the innermost one
+(that was Attempt 1's gap).
+
+**If this still doesn't fully hold**, the documented, blunt fallback remains: set
+`LANGSMITH_HIDE_INPUTS=true` and `LANGSMITH_HIDE_OUTPUTS=true` globally in
+`agent/config.py`. This hides all input/output content (not just PII) but doesn't depend
+on `tracing_context`/`create_anonymizer` working correctly, so it can't share either of
+the two failure modes above.
 
 If `LANGSMITH_API_KEY` is not set, `@traced_node` becomes a transparent no-op (verified —
 see the test suite) and the agent behaves identically, just without traces.

@@ -5,6 +5,7 @@ needs the same clients and constants -- this is the single source of truth
 referenced in the Problem Framing Document's deployment architecture note.
 """
 import os
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,28 +27,36 @@ if os.getenv("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_PROJECT", os.getenv("LANGSMITH_PROJECT", "skybridge-support-agent"))
     os.environ.setdefault("LANGCHAIN_API_KEY", os.getenv("LANGSMITH_API_KEY", ""))
-    # See README's LangSmith section for the full history here. Two prior
-    # attempts at fine-grained PII redaction each had a real problem found
-    # only through live testing: (1) per-function process_inputs/
-    # process_outputs missed LangGraph's own automatic tracing of the graph
-    # invocation and routing functions; (2) wrapping graph.invoke() in
-    # tracing_context(client=...) to redirect that automatic tracing through
-    # a custom anonymizer stopped ALL tracing from appearing, for reasons
-    # that could not be diagnosed without a live install to test against.
-    # Given two consecutive live-only failures on the fine-grained approach,
-    # this settles on the simple, documented-safe mechanism: hide
-    # inputs/outputs globally. This does not touch run creation, naming,
-    # hierarchy, or timing -- only the input/output content payload -- so it
-    # should not have the same failure mode as tracing_context() did.
-    os.environ.setdefault("LANGSMITH_HIDE_INPUTS", "true")
-    os.environ.setdefault("LANGSMITH_HIDE_OUTPUTS", "true")
     TRACING_ENABLED = True
 else:
     TRACING_ENABLED = False
 
-TRACED_CLIENT = None  # no longer used for a custom anonymizer -- kept as a
-                      # stable import target so agent/tracing.py doesn't need
-                      # a structural change if this is revisited later.
+# --- PII-aware LangSmith client ---
+# See README's LangSmith section for the full history. Short version:
+# LangGraph has its own built-in, automatic LangSmith tracing (separate from
+# agent/tracing.py's per-function @traceable wrapper), so per-function
+# redaction alone misses the top-level graph run and routing-function runs.
+# The fix is a Client with a recursive `anonymizer`, applied via
+# tracing_context() around graph.invoke() (see agent/tracing.py's
+# graph_tracing_context()).
+#
+# A first attempt at this failed with "'str' object has no attribute 'sub'"
+# in Render's logs, on every single trace -- root cause: create_anonymizer's
+# rules must use COMPILED regex objects (re.compile(...)) for "pattern", not
+# raw strings. Passing raw strings meant LangSmith tried to call .sub() (a
+# compiled-pattern method) on a plain str internally, which fails, silently,
+# in a background thread -- explaining why traces stopped appearing
+# entirely rather than just failing to redact.
+TRACED_CLIENT = None
+if TRACING_ENABLED:
+    from langsmith import Client
+    from langsmith.anonymizer import create_anonymizer
+
+    _ANONYMIZER_RULES = [
+        {"pattern": re.compile(r"\b[A-Z0-9]{5,8}\b"), "replace": "[REDACTED]"},
+        {"pattern": re.compile(r"\S+@\S+"), "replace": "[REDACTED_EMAIL]"},
+    ]
+    TRACED_CLIENT = Client(anonymizer=create_anonymizer(_ANONYMIZER_RULES))
 
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
