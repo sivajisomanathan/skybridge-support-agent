@@ -26,49 +26,28 @@ if os.getenv("LANGSMITH_API_KEY"):
     os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
     os.environ.setdefault("LANGCHAIN_PROJECT", os.getenv("LANGSMITH_PROJECT", "skybridge-support-agent"))
     os.environ.setdefault("LANGCHAIN_API_KEY", os.getenv("LANGSMITH_API_KEY", ""))
+    # See README's LangSmith section for the full history here. Two prior
+    # attempts at fine-grained PII redaction each had a real problem found
+    # only through live testing: (1) per-function process_inputs/
+    # process_outputs missed LangGraph's own automatic tracing of the graph
+    # invocation and routing functions; (2) wrapping graph.invoke() in
+    # tracing_context(client=...) to redirect that automatic tracing through
+    # a custom anonymizer stopped ALL tracing from appearing, for reasons
+    # that could not be diagnosed without a live install to test against.
+    # Given two consecutive live-only failures on the fine-grained approach,
+    # this settles on the simple, documented-safe mechanism: hide
+    # inputs/outputs globally. This does not touch run creation, naming,
+    # hierarchy, or timing -- only the input/output content payload -- so it
+    # should not have the same failure mode as tracing_context() did.
+    os.environ.setdefault("LANGSMITH_HIDE_INPUTS", "true")
+    os.environ.setdefault("LANGSMITH_HIDE_OUTPUTS", "true")
     TRACING_ENABLED = True
 else:
     TRACING_ENABLED = False
 
-# --- PII-aware LangSmith client (see agent/tracing.py) ---
-# LangGraph has its own built-in, automatic LangSmith tracing, separate from
-# any @traceable-decorated function -- confirmed via real traces in a live
-# LangSmith project showing unredacted PNRs in the top-level "LangGraph" run
-# and routing-function runs, even though individually-decorated node
-# functions redacted correctly for their own specific input/output.
-#
-# The correct fix, per LangSmith's own documentation and a dedicated example
-# in their PII-removal reference repo for this exact scenario
-# (langchain-ai/langsmith-pii-removal, langgraph-example/agent.py): build a
-# Client with a recursive `anonymizer` function, and make LangGraph's
-# automatic tracing route through THAT client for the duration of each graph
-# invocation via `tracing_context`. This masks PII specifically (any string
-# matching the PNR/email patterns) while preserving all other field-level
-# visibility (intent_category, tools_used, etc.) in the LangSmith UI --
-# unlike blanket LANGSMITH_HIDE_INPUTS/OUTPUTS, which hides everything.
-#
-# CAVEAT: this specific mechanism (a custom anonymizer client covering
-# LangGraph's automatic traces via tracing_context, not just explicitly
-# decorated functions) could not be verified against a live installation in
-# this build environment (no PyPI access). This replaces an earlier attempt
-# (per-function process_inputs/process_outputs) that real testing showed was
-# incomplete. Confirm on your next real run that PII is masked at ALL trace
-# levels (the top-level "LangGraph" run, routing-function runs, and
-# individual node runs) -- not just the innermost ones. If PII still leaks
-# through the top-level/routing-function runs specifically, the guaranteed
-# (but blunt) fallback is setting LANGSMITH_HIDE_INPUTS=true and
-# LANGSMITH_HIDE_OUTPUTS=true, which trades away all field-level visibility
-# in LangSmith but is documented to work regardless of trace source.
-TRACED_CLIENT = None
-if TRACING_ENABLED:
-    from langsmith import Client
-    from langsmith.anonymizer import create_anonymizer
-
-    _ANONYMIZER_RULES = [
-        {"pattern": r"\b[A-Z0-9]{5,8}\b", "replace": "[REDACTED]"},
-        {"pattern": r"\S+@\S+", "replace": "[REDACTED_EMAIL]"},
-    ]
-    TRACED_CLIENT = Client(anonymizer=create_anonymizer(_ANONYMIZER_RULES))
+TRACED_CLIENT = None  # no longer used for a custom anonymizer -- kept as a
+                      # stable import target so agent/tracing.py doesn't need
+                      # a structural change if this is revisited later.
 
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
